@@ -100,11 +100,22 @@ jobs:
 
       - name: Maintain Connection
         run: |
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: RDP"
-          Write-Host "Password: $(echo $env:RDP_CREDS)"
-          Write-Host "==================`n"
+          
+          Write-Host ""
+          Write-Host "┌─────────────────────────────────────────────────────┐"
+          Write-Host "│              🚀 RDP SESSION READY                  │"
+          Write-Host "├─────────────────────────────────────────────────────┤"
+          Write-Host "│  🔗  Address:   $env:TAILSCALE_IP                  │"
+          Write-Host "│  👤  Username:   RDP                               │"
+          Write-Host "│  🔑  Password:  $env:RDP_CREDS                      │"
+          Write-Host "│                                                     │"
+          Write-Host "│  📁  Files Location:                               │"
+          Write-Host "│     C:\Users\$env:RDP_USER\AppData\Local\Temp      │"
+          Write-Host "│                                                     │"
+          Write-Host "│  ⏰  Session Time: 60 minutes                       │"
+          Write-Host "│  ⚠️  Auto-terminates after timeout                 │"
+          Write-Host "└─────────────────────────────────────────────────────┘"
+          Write-Host ""
           
           # Keep runner active indefinitely (or until manually cancelled)
           while ($true) {
