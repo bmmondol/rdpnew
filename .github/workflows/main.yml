@@ -107,7 +107,7 @@ jobs:
           Write-Host "├─────────────────────────────────────────────────────┤"
           Write-Host "│  🔗  Address:   $env:TAILSCALE_IP                  │"
           Write-Host "│  👤  Username:   RDP                               │"
-          Write-Host "│  🔑  Password:  $env:RDP_CREDS                      │"
+          Write-Host "│  🔑  Password:  !Ks2025                            │"
           Write-Host "│                                                     │"
           Write-Host "│  📁  Files Location:                               │"
           Write-Host "│     C:\Users\$env:RDP_USER\AppData\Local\Temp      │"
