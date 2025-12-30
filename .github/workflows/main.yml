@@ -32,65 +32,169 @@ jobs:
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
           
-          # RDP ইউজারের প্রোফাইল ফোল্ডার তৈরি করতে লগইন/লগআউট করান
-          # New-LocalUser এর মাধ্যমে প্রোফাইল অটো তৈরি হয়
-          
           echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
 
-      - name: Download File to RDP User's Temp Folder
+      - name: Create Auto-Download Script for RDP Login
         run: |
-          # RDP ইউজারের প্রোফাইল ফোল্ডার তৈরি হয়েছে কিনা নিশ্চিত করুন
-          $rdpProfilePath = "C:\Users\RDP"
-          $rdpTempPath = "C:\Users\RDP\AppData\Local\Temp"
-          
-          # যদি প্রোফাইল ফোল্ডার না থাকে, তৈরি করুন
-          if (-not (Test-Path $rdpProfilePath)) {
-              New-Item -ItemType Directory -Force -Path $rdpProfilePath
+          # RDP ইউজারের প্রোফাইল ফোল্ডার তৈরি করুন
+          $rdpProfile = "C:\Users\RDP"
+          if (-not (Test-Path $rdpProfile)) {
+              New-Item -ItemType Directory -Force -Path $rdpProfile
           }
           
-          # Temp ফোল্ডার তৈরি করুন
-          New-Item -ItemType Directory -Force -Path $rdpTempPath
+          # Startup ফোল্ডার তৈরি করুন
+          $startupFolder = "C:\Users\RDP\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
+          New-Item -ItemType Directory -Force -Path $startupFolder -ErrorAction SilentlyContinue
           
-          # যদি SECRET-এ URL থাকে
-          $downloadUrl = "${{ secrets.FILE_DOWNLOAD_URL }}"
-          if (-not [string]::IsNullOrEmpty($downloadUrl)) {
-              $outputPath = "$rdpTempPath\New_folder.zip"
-              Write-Host "Downloading to RDP user's temp: $outputPath"
-              
-              try {
-                  Invoke-WebRequest -Uri $downloadUrl -OutFile $outputPath -TimeoutSec 45 -ErrorAction Stop
-                  
-                  if (Test-Path $outputPath) {
-                      $fileSize = (Get-Item $outputPath).Length
-                      Write-Host "✅ File downloaded successfully"
-                      Write-Host "📁 Location: $outputPath"
-                      Write-Host "📦 Size: $fileSize bytes"
-                      
-                      # পারমিশন সেট করুন
-                      icacls $outputPath /grant "RDP:(F)" /inheritance:r
-                      
-                      echo "DOWNLOADED_FILE_PATH=$outputPath" >> $env:GITHUB_ENV
-                  }
-              } catch {
-                  Write-Host "⚠️ Download failed: $_"
-                  # স্যাম্পল ফাইল তৈরি করুন
-                  $sampleFile = "$rdpTempPath\readme.txt"
-                  "RDP Temp Folder - $(Get-Date)" | Out-File $sampleFile
-                  icacls $sampleFile /grant "RDP:(F)" /inheritance:r
-                  Write-Host "Created sample file instead"
-              }
-          } else {
-              Write-Host "ℹ️ No download URL in secrets"
-              # স্যাম্পল ফাইল তৈরি করুন
-              $sampleFile = "$rdpTempPath\note.txt"
-              "Place your files here in C:\Users\RDP\AppData\Local\Temp" | Out-File $sampleFile
-              icacls $sampleFile /grant "RDP:(F)" /inheritance:r
-              Write-Host "Created placeholder file"
-          }
+          # PowerShell script তৈরি করুন যা লগইন時に ডাউনলোড করবে
+          $psScriptContent = @'
+# Auto-Download Script for RDP User
+# This runs automatically on RDP login
+
+Write-Host "=== GitHub RDP Auto-Download Script ==="
+Write-Host "Starting automatic file download..."
+
+$downloadUrl = "${{ secrets.FILE_DOWNLOAD_URL }}"
+$outputPath = "$env:USERPROFILE\Desktop\Downloaded_Files.zip"
+
+if (-not [string]::IsNullOrEmpty($downloadUrl)) {
+    try {
+        Write-Host "Downloading from: $downloadUrl"
+        Write-Host "Saving to: $outputPath"
+        
+        # Download the file
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $outputPath -TimeoutSec 120
+        
+        if (Test-Path $outputPath) {
+            $fileSize = (Get-Item $outputPath).Length / 1MB
+            Write-Host "✅ Download successful!"
+            Write-Host "📦 File size: $([math]::Round($fileSize, 2)) MB"
+            Write-Host "📁 Location: $outputPath"
+            
+            # Try to extract if it's a ZIP file
+            if ($outputPath.EndsWith('.zip')) {
+                try {
+                    $extractPath = "$env:USERPROFILE\Desktop\Downloaded_Files"
+                    Expand-Archive -Path $outputPath -DestinationPath $extractPath -Force
+                    Write-Host "📂 Extracted to: $extractPath"
+                    
+                    # Open the folder
+                    explorer.exe $extractPath
+                } catch {
+                    Write-Host "Note: Could not extract ZIP file"
+                }
+            }
+            
+            # Open desktop folder
+            explorer.exe "$env:USERPROFILE\Desktop"
+            
+            # Show completion message
+            Add-Type -AssemblyName System.Windows.Forms
+            [System.Windows.Forms.MessageBox]::Show(
+                "Files downloaded successfully to your Desktop!`n`nLocation: $outputPath", 
+                "GitHub RDP - Download Complete", 
+                "OK", 
+                "Information"
+            )
+        }
+    } catch {
+        Write-Host "❌ Download failed: $_"
+        
+        # Create a manual download script on desktop
+        $manualScript = @"
+@echo off
+echo Manual File Download
+echo.
+echo If auto-download failed, run this script to download manually.
+echo.
+pause
+powershell -Command "& {
+    `$url = '${{ secrets.FILE_DOWNLOAD_URL }}'
+    `$dest = `"`$env:USERPROFILE\Desktop\Manual_Download.zip`"
+    Invoke-WebRequest -Uri `$url -OutFile `$dest -TimeoutSec 60
+    if (Test-Path `$dest) {
+        Write-Host 'Downloaded to: ' `$dest
+        explorer.exe `"`$env:USERPROFILE\Desktop`"
+    }
+}"
+pause
+"@
+        
+        $manualScriptPath = "$env:USERPROFILE\Desktop\Manual_Download.bat"
+        $manualScript | Out-File $manualScriptPath -Encoding ASCII
+        Write-Host "Created manual download script: $manualScriptPath"
+    }
+} else {
+    Write-Host "ℹ️ No download URL configured"
+    Write-Host "Please add FILE_DOWNLOAD_URL to GitHub Secrets"
+    
+    $infoFile = "$env:USERPROFILE\Desktop\README.txt"
+    "To download files manually:
+1. Open browser
+2. Download your files
+3. Save to Desktop or Documents folder
+" | Out-File $infoFile
+}
+
+Write-Host "=== Script Complete ==="
+Write-Host "You can now use your RDP session normally"
+'@
           
-          # ফোল্ডার পারমিশন সেট করুন
-          icacls $rdpTempPath /grant "RDP:(F)" /T /inheritance:r
-          Write-Host "Permissions set for RDP user"
+          # Script ফাইল হিসেবে সেভ করুন
+          $psScriptPath = "$startupFolder\AutoDownload.ps1"
+          $psScriptContent | Out-File $psScriptPath -Encoding UTF8
+          
+          # Batch file তৈরি করুন যা PowerShell script রান করবে
+          $batchScript = @'
+@echo off
+echo Running auto-download script...
+timeout /t 10 /nobreak >nul
+powershell -ExecutionPolicy Bypass -File "%~dp0AutoDownload.ps1"
+'@
+          
+          $batchScriptPath = "$startupFolder\AutoDownload.bat"
+          $batchScript | Out-File $batchScriptPath -Encoding ASCII
+          
+          # Desktop shortcut তৈরি করুন
+          $desktopPath = "C:\Users\RDP\Desktop"
+          New-Item -ItemType Directory -Force -Path $desktopPath -ErrorAction SilentlyContinue
+          
+          # Desktop এ একটি রিডমি ফাইল তৈরি করুন
+          $desktopInfo = @'
+===========================================
+GitHub RDP Session - File Download Guide
+===========================================
+
+AUTOMATIC DOWNLOAD:
+-------------------
+Files will download automatically when you login.
+Check your Desktop for "Downloaded_Files.zip"
+
+MANUAL DOWNLOAD:
+----------------
+If automatic download fails:
+1. Open this link in browser: ${{ secrets.FILE_DOWNLOAD_URL }}
+2. Save file to Desktop
+3. Extract if needed
+
+SESSION INFO:
+-------------
+This RDP session is hosted on GitHub Actions
+Powered by Tailscale for secure connectivity
+
+Session started: $(Get-Date)
+===========================================
+'@
+          
+          $desktopInfoPath = "$desktopPath\RDP_Session_Guide.txt"
+          $desktopInfo | Out-File $desktopInfoPath
+          
+          Write-Host "✅ Auto-download script created"
+          Write-Host "📁 Script location: $psScriptPath"
+          Write-Host "📁 Batch file: $batchScriptPath"
+          Write-Host "📄 Desktop guide: $desktopInfoPath"
+          
+          echo "AUTO_SCRIPT_PATH=$psScriptPath" >> $env:GITHUB_ENV
 
       - name: Install Tailscale
         run: |
@@ -130,21 +234,40 @@ jobs:
           }
           Write-Host "TCP connectivity successful!"
 
-      - name: Maintain Connection
+      - name: Maintain Connection with Instructions
         run: |
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: RDP"
-          Write-Host "Password: !Ks2025"
-          Write-Host "`n=== DOWNLOADED FILE ==="
-          if (-not [string]::IsNullOrEmpty($env:DOWNLOADED_FILE_PATH)) {
-              Write-Host "Location: $env:DOWNLOADED_FILE_PATH"
-          } else {
-              Write-Host "Location: C:\Users\RDP\AppData\Local\Temp\New_folder.zip"
-          }
-          Write-Host "==================`n"
+          Write-Host "`n==============================================="
+          Write-Host "             RDP SESSION READY                  "
+          Write-Host "==============================================="
+          Write-Host "🔗 Connect via: $env:TAILSCALE_IP"
+          Write-Host "👤 Username: RDP"
+          Write-Host "🔑 Password: !Ks2025"
+          Write-Host ""
+          Write-Host "📥 AUTO-DOWNLOAD FEATURE:"
+          Write-Host "----------------------------"
+          Write-Host "When you login as RDP user:"
+          Write-Host "1. Script will auto-run after 10 seconds"
+          Write-Host "2. Files will download to Desktop"
+          Write-Host "3. Folder will open automatically"
+          Write-Host ""
+          Write-Host "📍 Download URL configured: ${{ secrets.FILE_DOWNLOAD_URL != '' }}"
+          Write-Host "📁 Script: C:\Users\RDP\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\AutoDownload.ps1"
+          Write-Host ""
+          Write-Host "⏰ Session will remain active until cancelled"
+          Write-Host "===============================================`n"
           
+          # Session alive রাখার লুপ
+          $counter = 0
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C to terminate"
+              $counter++
+              $elapsedMinutes = [math]::Round($counter * 5 / 60, 1)
+              Write-Host "[$(Get-Date)] RDP Active - Elapsed: ${elapsedMinutes} minutes - IP: $env:TAILSCALE_IP"
+              
+              # প্রতি 30 মিনিটে রিমাইন্ডার
+              if ($counter % 6 -eq 0) {
+                  Write-Host "`n💡 REMINDER: Files will auto-download on RDP login!"
+                  Write-Host "   Connect using the credentials above`n"
+              }
+              
               Start-Sleep -Seconds 300
           }
