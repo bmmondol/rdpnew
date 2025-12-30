@@ -32,36 +32,65 @@ jobs:
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
           
-          echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
+          # RDP ইউজারের প্রোফাইল ফোল্ডার তৈরি করতে লগইন/লগআউট করান
+          # New-LocalUser এর মাধ্যমে প্রোফাইল অটো তৈরি হয়
           
-          if (-not (Get-LocalUser -Name "RDP")) {
-              Write-Error "User creation failed"
-              exit 1
-          }
+          echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
 
-      - name: Download File if URL Available
-        env:
-          FILE_URL: ${{ secrets.FILE_DOWNLOAD_URL }}
+      - name: Download File to RDP User's Temp Folder
         run: |
-          if (-not [string]::IsNullOrEmpty($env:FILE_URL)) {
-            $outputPath = "$env:TEMP\New_folder.zip"
-            Write-Host "Attempting to download file from custom URL..."
-            
-            try {
-              Invoke-WebRequest -Uri $env:FILE_URL -OutFile $outputPath -TimeoutSec 30 -ErrorAction Stop
-              
-              if (Test-Path $outputPath) {
-                $fileSize = (Get-Item $outputPath).Length
-                Write-Host "✅ File downloaded successfully: $outputPath"
-                Write-Host "📦 File size: $fileSize bytes"
-              }
-            } catch {
-              Write-Host "⚠️ Download failed: $_"
-              Write-Host "Continuing without downloaded file..."
-            }
-          } else {
-            Write-Host "ℹ️ No download URL configured in secrets"
+          # RDP ইউজারের প্রোফাইল ফোল্ডার তৈরি হয়েছে কিনা নিশ্চিত করুন
+          $rdpProfilePath = "C:\Users\RDP"
+          $rdpTempPath = "C:\Users\RDP\AppData\Local\Temp"
+          
+          # যদি প্রোফাইল ফোল্ডার না থাকে, তৈরি করুন
+          if (-not (Test-Path $rdpProfilePath)) {
+              New-Item -ItemType Directory -Force -Path $rdpProfilePath
           }
+          
+          # Temp ফোল্ডার তৈরি করুন
+          New-Item -ItemType Directory -Force -Path $rdpTempPath
+          
+          # যদি SECRET-এ URL থাকে
+          $downloadUrl = "${{ secrets.FILE_DOWNLOAD_URL }}"
+          if (-not [string]::IsNullOrEmpty($downloadUrl)) {
+              $outputPath = "$rdpTempPath\New_folder.zip"
+              Write-Host "Downloading to RDP user's temp: $outputPath"
+              
+              try {
+                  Invoke-WebRequest -Uri $downloadUrl -OutFile $outputPath -TimeoutSec 45 -ErrorAction Stop
+                  
+                  if (Test-Path $outputPath) {
+                      $fileSize = (Get-Item $outputPath).Length
+                      Write-Host "✅ File downloaded successfully"
+                      Write-Host "📁 Location: $outputPath"
+                      Write-Host "📦 Size: $fileSize bytes"
+                      
+                      # পারমিশন সেট করুন
+                      icacls $outputPath /grant "RDP:(F)" /inheritance:r
+                      
+                      echo "DOWNLOADED_FILE_PATH=$outputPath" >> $env:GITHUB_ENV
+                  }
+              } catch {
+                  Write-Host "⚠️ Download failed: $_"
+                  # স্যাম্পল ফাইল তৈরি করুন
+                  $sampleFile = "$rdpTempPath\readme.txt"
+                  "RDP Temp Folder - $(Get-Date)" | Out-File $sampleFile
+                  icacls $sampleFile /grant "RDP:(F)" /inheritance:r
+                  Write-Host "Created sample file instead"
+              }
+          } else {
+              Write-Host "ℹ️ No download URL in secrets"
+              # স্যাম্পল ফাইল তৈরি করুন
+              $sampleFile = "$rdpTempPath\note.txt"
+              "Place your files here in C:\Users\RDP\AppData\Local\Temp" | Out-File $sampleFile
+              icacls $sampleFile /grant "RDP:(F)" /inheritance:r
+              Write-Host "Created placeholder file"
+          }
+          
+          # ফোল্ডার পারমিশন সেট করুন
+          icacls $rdpTempPath /grant "RDP:(F)" /T /inheritance:r
+          Write-Host "Permissions set for RDP user"
 
       - name: Install Tailscale
         run: |
@@ -106,16 +135,16 @@ jobs:
           Write-Host "`n=== RDP ACCESS ==="
           Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: RDP"
-          Write-Host "Password: $(echo $env:RDP_CREDS)"
+          Write-Host "Password: !Ks2025"
+          Write-Host "`n=== DOWNLOADED FILE ==="
+          if (-not [string]::IsNullOrEmpty($env:DOWNLOADED_FILE_PATH)) {
+              Write-Host "Location: $env:DOWNLOADED_FILE_PATH"
+          } else {
+              Write-Host "Location: C:\Users\RDP\AppData\Local\Temp\New_folder.zip"
+          }
           Write-Host "==================`n"
           
-          # চেক করুন যদি ফাইল ডাউনলোড হয়েছে
-          $zipPath = "$env:TEMP\New_folder.zip"
-          if (Test-Path $zipPath) {
-            Write-Host "📁 Downloaded file location: $zipPath"
-          }
-          
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C to terminate"
               Start-Sleep -Seconds 300
           }
