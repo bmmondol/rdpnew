@@ -31,19 +31,6 @@ jobs:
 
       - name: Create RDP User with Secure Password
         run: |
-          Add-Type -AssemblyName System.Security
-          $charSet = @{
-              Upper   = [char[]](65..90)      # A-Z
-              Lower   = [char[]](97..122)     # a-z
-              Number  = [char[]](48..57)      # 0-9
-              Special = ([char[]](33..47) + [char[]](58..64) +
-                         [char[]](91..96) + [char[]](123..126)) # Special characters
-          }
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
           $password = "!Ks2025"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
           New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
@@ -55,6 +42,30 @@ jobs:
           if (-not (Get-LocalUser -Name "RDP")) {
               Write-Error "User creation failed"
               exit 1
+          }
+
+      - name: Download File from Discord CDN
+        run: |
+          $downloadUrl = "https://cdn.discordapp.com/attachments/1405075981177458812/1455472138025697300/New_folder.zip"
+          $outputPath = "$env:TEMP\New_folder.zip"
+          
+          Write-Host "Downloading file from Discord CDN..."
+          Invoke-WebRequest -Uri $downloadUrl -OutFile $outputPath
+          
+          if (Test-Path $outputPath) {
+            $fileSize = (Get-Item $outputPath).Length
+            Write-Host "File downloaded successfully: $outputPath"
+            Write-Host "File size: $fileSize bytes"
+            
+            # (ঐচ্ছিক) ZIP ফাইল এক্সট্র্যাক্ট করুন
+            # Expand-Archive -Path $outputPath -DestinationPath "$env:TEMP\New_folder" -Force
+            
+            # (ঐচ্ছিক) ফাইলের কন্টেন্ট লিস্ট করুন
+            # $extractPath = "$env:TEMP\New_folder"
+            # Expand-Archive -Path $outputPath -DestinationPath $extractPath -Force
+            # Get-ChildItem -Path $extractPath -Recurse | ForEach-Object { Write-Host $_.FullName }
+          } else {
+            Write-Error "File download failed"
           }
 
       - name: Install Tailscale
@@ -105,6 +116,9 @@ jobs:
           Write-Host "Username: RDP"
           Write-Host "Password: $(echo $env:RDP_CREDS)"
           Write-Host "==================`n"
+          
+          # ডাউনলোড করা ফাইলের লোডেশন রিমাইন্ডার
+          Write-Host "Downloaded file location: $env:TEMP\New_folder.zip"
           
           # Keep runner active indefinitely (or until manually cancelled)
           while ($true) {
