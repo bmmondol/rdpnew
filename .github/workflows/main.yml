@@ -11,7 +11,6 @@ jobs:
     steps:
       - name: Configure Core RDP Settings
         run: |
-          # Enable Remote Desktop and disable Network Level Authentication (if needed)
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
                              -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
@@ -19,14 +18,10 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
                              -Name "SecurityLayer" -Value 0 -Force
 
-          # Remove any existing rule with the same name to avoid duplication
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          
-          # For testing, allow any incoming connection on port 3389
           netsh advfirewall firewall add rule name="RDP-Tailscale" `
             dir=in action=allow protocol=TCP localport=3389
 
-          # (Optional) Restart the Remote Desktop service to ensure changes take effect
           Restart-Service -Name TermService -Force
 
       - name: Create RDP User with Secure Password
@@ -44,28 +39,28 @@ jobs:
               exit 1
           }
 
-      - name: Download File from Discord CDN
+      - name: Download File if URL Available
+        env:
+          FILE_URL: ${{ secrets.FILE_DOWNLOAD_URL }}
         run: |
-          $downloadUrl = "https://cdn.discordapp.com/attachments/1405075981177458812/1455472138025697300/New_folder.zip"
-          $outputPath = "$env:TEMP\New_folder.zip"
-          
-          Write-Host "Downloading file from Discord CDN..."
-          Invoke-WebRequest -Uri $downloadUrl -OutFile $outputPath
-          
-          if (Test-Path $outputPath) {
-            $fileSize = (Get-Item $outputPath).Length
-            Write-Host "File downloaded successfully: $outputPath"
-            Write-Host "File size: $fileSize bytes"
+          if (-not [string]::IsNullOrEmpty($env:FILE_URL)) {
+            $outputPath = "$env:TEMP\New_folder.zip"
+            Write-Host "Attempting to download file from custom URL..."
             
-            # (ঐচ্ছিক) ZIP ফাইল এক্সট্র্যাক্ট করুন
-            # Expand-Archive -Path $outputPath -DestinationPath "$env:TEMP\New_folder" -Force
-            
-            # (ঐচ্ছিক) ফাইলের কন্টেন্ট লিস্ট করুন
-            # $extractPath = "$env:TEMP\New_folder"
-            # Expand-Archive -Path $outputPath -DestinationPath $extractPath -Force
-            # Get-ChildItem -Path $extractPath -Recurse | ForEach-Object { Write-Host $_.FullName }
+            try {
+              Invoke-WebRequest -Uri $env:FILE_URL -OutFile $outputPath -TimeoutSec 30 -ErrorAction Stop
+              
+              if (Test-Path $outputPath) {
+                $fileSize = (Get-Item $outputPath).Length
+                Write-Host "✅ File downloaded successfully: $outputPath"
+                Write-Host "📦 File size: $fileSize bytes"
+              }
+            } catch {
+              Write-Host "⚠️ Download failed: $_"
+              Write-Host "Continuing without downloaded file..."
+            }
           } else {
-            Write-Error "File download failed"
+            Write-Host "ℹ️ No download URL configured in secrets"
           }
 
       - name: Install Tailscale
@@ -79,10 +74,8 @@ jobs:
 
       - name: Establish Tailscale Connection
         run: |
-          # Bring up Tailscale with the provided auth key and set a unique hostname
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
           
-          # Wait for Tailscale to assign an IP
           $tsIP = $null
           $retries = 0
           while (-not $tsIP -and $retries -lt 10) {
@@ -101,7 +94,6 @@ jobs:
         run: |
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
           
-          # Test connectivity using Test-NetConnection against the Tailscale IP on port 3389
           $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
           if (-not $testResult.TcpTestSucceeded) {
               Write-Error "TCP connection to RDP port 3389 failed"
@@ -117,10 +109,12 @@ jobs:
           Write-Host "Password: $(echo $env:RDP_CREDS)"
           Write-Host "==================`n"
           
-          # ডাউনলোড করা ফাইলের লোডেশন রিমাইন্ডার
-          Write-Host "Downloaded file location: $env:TEMP\New_folder.zip"
+          # চেক করুন যদি ফাইল ডাউনলোড হয়েছে
+          $zipPath = "$env:TEMP\New_folder.zip"
+          if (Test-Path $zipPath) {
+            Write-Host "📁 Downloaded file location: $zipPath"
+          }
           
-          # Keep runner active indefinitely (or until manually cancelled)
           while ($true) {
               Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
               Start-Sleep -Seconds 300
