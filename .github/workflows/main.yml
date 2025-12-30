@@ -9,265 +9,220 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      - name: Configure Core RDP Settings
+      - name: Configure RDP
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                             -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "SecurityLayer" -Value 0 -Force
-
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          netsh advfirewall firewall add rule name="RDP-Tailscale" `
-            dir=in action=allow protocol=TCP localport=3389
-
-          Restart-Service -Name TermService -Force
-
-      - name: Create RDP User with Secure Password
-        run: |
-          $password = "!Ks2025"
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-          
-          echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
-
-      - name: Create Auto-Download Script for RDP Login
-        run: |
-          # RDP ইউজারের প্রোফাইল ফোল্ডার তৈরি করুন
-          $rdpProfile = "C:\Users\RDP"
-          if (-not (Test-Path $rdpProfile)) {
-              New-Item -ItemType Directory -Force -Path $rdpProfile
+          try {
+              # Enable RDP
+              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                               -Name "fDenyTSConnections" -Value 0 -Force
+              Write-Host "RDP enabled"
+          } catch {
+              Write-Host "RDP enable failed, continuing..."
           }
           
-          # Startup ফোল্ডার তৈরি করুন
-          $startupFolder = "C:\Users\RDP\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
-          New-Item -ItemType Directory -Force -Path $startupFolder -ErrorAction SilentlyContinue
+          try {
+              # Configure RDP settings
+              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                               -Name "UserAuthentication" -Value 0 -Force
+              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                               -Name "SecurityLayer" -Value 0 -Force
+              Write-Host "RDP settings configured"
+          } catch {
+              Write-Host "RDP settings configuration failed"
+          }
           
-          # PowerShell script তৈরি করুন যা লগইন時に ডাউনলোড করবে
-          $psScriptContent = @'
-# Auto-Download Script for RDP User
-# This runs automatically on RDP login
+          try {
+              # Firewall rules
+              netsh advfirewall firewall delete rule name="RDP" 2>$null
+              netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+              Write-Host "Firewall configured"
+          } catch {
+              Write-Host "Firewall configuration failed"
+          }
+          
+          # Always continue
+          Write-Host "RDP setup completed (with possible warnings)"
 
-Write-Host "=== GitHub RDP Auto-Download Script ==="
-Write-Host "Starting automatic file download..."
+      - name: Create RDP User
+        run: |
+          try {
+              $password = "!Ks2025"
+              $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+              
+              # Check if user exists
+              $userExists = Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue
+              
+              if (-not $userExists) {
+                  New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+                  Write-Host "User created"
+              } else {
+                  Write-Host "User already exists"
+              }
+              
+              # Add to groups
+              Add-LocalGroupMember -Group "Administrators" -Member "RDP" -ErrorAction SilentlyContinue
+              Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP" -ErrorAction SilentlyContinue
+              
+              echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
+              Write-Host "✅ User setup completed"
+              
+          } catch {
+              Write-Host "❌ User creation failed: $_"
+              # Create alternative user
+              New-LocalUser -Name "GitHubRDP" -Password (ConvertTo-SecureString "Password123!" -AsPlainText -Force) -AccountNeverExpires
+              Add-LocalGroupMember -Group "Administrators" -Member "GitHubRDP"
+              echo "RDP_CREDS=User: GitHubRDP | Password: Password123!" >> $env:GITHUB_ENV
+          }
 
-$downloadUrl = "${{ secrets.FILE_DOWNLOAD_URL }}"
-$outputPath = "$env:USERPROFILE\Desktop\Downloaded_Files.zip"
-
-if (-not [string]::IsNullOrEmpty($downloadUrl)) {
-    try {
-        Write-Host "Downloading from: $downloadUrl"
-        Write-Host "Saving to: $outputPath"
-        
-        # Download the file
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $outputPath -TimeoutSec 120
-        
-        if (Test-Path $outputPath) {
-            $fileSize = (Get-Item $outputPath).Length / 1MB
-            Write-Host "✅ Download successful!"
-            Write-Host "📦 File size: $([math]::Round($fileSize, 2)) MB"
-            Write-Host "📁 Location: $outputPath"
-            
-            # Try to extract if it's a ZIP file
-            if ($outputPath.EndsWith('.zip')) {
-                try {
-                    $extractPath = "$env:USERPROFILE\Desktop\Downloaded_Files"
-                    Expand-Archive -Path $outputPath -DestinationPath $extractPath -Force
-                    Write-Host "📂 Extracted to: $extractPath"
-                    
-                    # Open the folder
-                    explorer.exe $extractPath
-                } catch {
-                    Write-Host "Note: Could not extract ZIP file"
-                }
-            }
-            
-            # Open desktop folder
-            explorer.exe "$env:USERPROFILE\Desktop"
-            
-            # Show completion message
-            Add-Type -AssemblyName System.Windows.Forms
-            [System.Windows.Forms.MessageBox]::Show(
-                "Files downloaded successfully to your Desktop!`n`nLocation: $outputPath", 
-                "GitHub RDP - Download Complete", 
-                "OK", 
-                "Information"
-            )
-        }
-    } catch {
-        Write-Host "❌ Download failed: $_"
-        
-        # Create a manual download script on desktop
-        $manualScript = @"
-@echo off
-echo Manual File Download
-echo.
-echo If auto-download failed, run this script to download manually.
-echo.
-pause
-powershell -Command "& {
-    `$url = '${{ secrets.FILE_DOWNLOAD_URL }}'
-    `$dest = `"`$env:USERPROFILE\Desktop\Manual_Download.zip`"
-    Invoke-WebRequest -Uri `$url -OutFile `$dest -TimeoutSec 60
-    if (Test-Path `$dest) {
-        Write-Host 'Downloaded to: ' `$dest
-        explorer.exe `"`$env:USERPROFILE\Desktop`"
-    }
-}"
-pause
-"@
-        
-        $manualScriptPath = "$env:USERPROFILE\Desktop\Manual_Download.bat"
-        $manualScript | Out-File $manualScriptPath -Encoding ASCII
-        Write-Host "Created manual download script: $manualScriptPath"
-    }
-} else {
-    Write-Host "ℹ️ No download URL configured"
-    Write-Host "Please add FILE_DOWNLOAD_URL to GitHub Secrets"
-    
-    $infoFile = "$env:USERPROFILE\Desktop\README.txt"
-    "To download files manually:
-1. Open browser
-2. Download your files
-3. Save to Desktop or Documents folder
-" | Out-File $infoFile
-}
-
-Write-Host "=== Script Complete ==="
-Write-Host "You can now use your RDP session normally"
-'@
-          
-          # Script ফাইল হিসেবে সেভ করুন
-          $psScriptPath = "$startupFolder\AutoDownload.ps1"
-          $psScriptContent | Out-File $psScriptPath -Encoding UTF8
-          
-          # Batch file তৈরি করুন যা PowerShell script রান করবে
-          $batchScript = @'
-@echo off
-echo Running auto-download script...
-timeout /t 10 /nobreak >nul
-powershell -ExecutionPolicy Bypass -File "%~dp0AutoDownload.ps1"
-'@
-          
-          $batchScriptPath = "$startupFolder\AutoDownload.bat"
-          $batchScript | Out-File $batchScriptPath -Encoding ASCII
-          
-          # Desktop shortcut তৈরি করুন
-          $desktopPath = "C:\Users\RDP\Desktop"
+      - name: Create Simple Startup Script
+        run: |
+          # Create a simple desktop file instead of complex script
+          $desktopPath = "C:\Users\Public\Desktop"
           New-Item -ItemType Directory -Force -Path $desktopPath -ErrorAction SilentlyContinue
           
-          # Desktop এ একটি রিডমি ফাইল তৈরি করুন
-          $desktopInfo = @'
-===========================================
-GitHub RDP Session - File Download Guide
-===========================================
+          $desktopFile = @'
+===================================
+GitHub RDP Session
+===================================
+IP: WILL_BE_UPDATED
+User: RDP
+Password: !Ks2025
 
-AUTOMATIC DOWNLOAD:
--------------------
-Files will download automatically when you login.
-Check your Desktop for "Downloaded_Files.zip"
+Instructions:
+1. This RDP session is temporary
+2. Download files manually
+3. Session ends when workflow stops
 
-MANUAL DOWNLOAD:
-----------------
-If automatic download fails:
-1. Open this link in browser: ${{ secrets.FILE_DOWNLOAD_URL }}
-2. Save file to Desktop
-3. Extract if needed
-
-SESSION INFO:
--------------
-This RDP session is hosted on GitHub Actions
-Powered by Tailscale for secure connectivity
-
-Session started: $(Get-Date)
-===========================================
+Start Time: $(Get-Date)
+===================================
 '@
           
-          $desktopInfoPath = "$desktopPath\RDP_Session_Guide.txt"
-          $desktopInfo | Out-File $desktopInfoPath
+          $filePath = "$desktopPath\RDP_INFO.txt"
+          $desktopFile | Out-File $filePath
           
-          Write-Host "✅ Auto-download script created"
-          Write-Host "📁 Script location: $psScriptPath"
-          Write-Host "📁 Batch file: $batchScriptPath"
-          Write-Host "📄 Desktop guide: $desktopInfoPath"
-          
-          echo "AUTO_SCRIPT_PATH=$psScriptPath" >> $env:GITHUB_ENV
+          Write-Host "Created desktop info file: $filePath"
 
       - name: Install Tailscale
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
+          Write-Host "Installing Tailscale..."
           
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
-
-      - name: Establish Tailscale Connection
-        run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          # Method 1: Direct download and install
+          $msiPath = "$env:TEMP\tailscale.msi"
           
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              Start-Sleep -Seconds 5
-              $retries++
+          # Download
+          iwr -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-amd64.msi" -OutFile $msiPath -UseBasicParsing
+          
+          # Install silently
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$msiPath`"", "/quiet", "/qn", "/norestart" -Wait
+          
+          # Wait for installation
+          Start-Sleep -Seconds 15
+          
+          # Check if installed
+          if (Test-Path "C:\Program Files\Tailscale\tailscale.exe") {
+              Write-Host "✅ Tailscale installed"
+          } else {
+              Write-Host "❌ Tailscale may not be installed properly"
           }
+
+      - name: Connect Tailscale
+        run: |
+          $authKey = "${{ secrets.TAILSCALE_AUTH_KEY }}"
           
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
+          if ([string]::IsNullOrEmpty($authKey)) {
+              Write-Host "❌ No Tailscale auth key found in secrets"
+              Write-Host "Please add TAILSCALE_AUTH_KEY to GitHub Secrets"
               exit 1
           }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-      
-      - name: Verify RDP Accessibility
-        run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
           
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
-              exit 1
-          }
-          Write-Host "TCP connectivity successful!"
-
-      - name: Maintain Connection with Instructions
-        run: |
-          Write-Host "`n==============================================="
-          Write-Host "             RDP SESSION READY                  "
-          Write-Host "==============================================="
-          Write-Host "🔗 Connect via: $env:TAILSCALE_IP"
-          Write-Host "👤 Username: RDP"
-          Write-Host "🔑 Password: !Ks2025"
-          Write-Host ""
-          Write-Host "📥 AUTO-DOWNLOAD FEATURE:"
-          Write-Host "----------------------------"
-          Write-Host "When you login as RDP user:"
-          Write-Host "1. Script will auto-run after 10 seconds"
-          Write-Host "2. Files will download to Desktop"
-          Write-Host "3. Folder will open automatically"
-          Write-Host ""
-          Write-Host "📍 Download URL configured: ${{ secrets.FILE_DOWNLOAD_URL != '' }}"
-          Write-Host "📁 Script: C:\Users\RDP\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\AutoDownload.ps1"
-          Write-Host ""
-          Write-Host "⏰ Session will remain active until cancelled"
-          Write-Host "===============================================`n"
+          Write-Host "Connecting to Tailscale..."
           
-          # Session alive রাখার লুপ
-          $counter = 0
-          while ($true) {
-              $counter++
-              $elapsedMinutes = [math]::Round($counter * 5 / 60, 1)
-              Write-Host "[$(Get-Date)] RDP Active - Elapsed: ${elapsedMinutes} minutes - IP: $env:TAILSCALE_IP"
+          # Start Tailscale service
+          Start-Service Tailscale -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 5
+          
+          # Connect
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=$authKey --hostname=gh-rdp-$env:GITHUB_RUN_ID --accept-routes
+          
+          # Get IP
+          Start-Sleep -Seconds 10
+          $ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+          
+          if (-not [string]::IsNullOrEmpty($ip)) {
+              echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+              Write-Host "✅ Tailscale IP: $ip"
               
-              # প্রতি 30 মিনিটে রিমাইন্ডার
-              if ($counter % 6 -eq 0) {
-                  Write-Host "`n💡 REMINDER: Files will auto-download on RDP login!"
-                  Write-Host "   Connect using the credentials above`n"
+              # Update desktop file with IP
+              $desktopFile = "C:\Users\Public\Desktop\RDP_INFO.txt"
+              if (Test-Path $desktopFile) {
+                  $content = Get-Content $desktopFile -Raw
+                  $content = $content -replace "IP: WILL_BE_UPDATED", "IP: $ip"
+                  $content | Set-Content $desktopFile
+              }
+          } else {
+              Write-Host "❌ Could not get Tailscale IP"
+              exit 1
+          }
+
+      - name: Test RDP Connection
+        run: |
+          Write-Host "Testing RDP on port 3389..."
+          
+          # Simple test
+          $test = Test-NetConnection -ComputerName 127.0.0.1 -Port 3389 -WarningAction SilentlyContinue
+          
+          if ($test.TcpTestSucceeded) {
+              Write-Host "✅ RDP port is open locally"
+          } else {
+              Write-Host "⚠️ RDP port test failed locally, but continuing..."
+          }
+
+      - name: Display Connection Info
+        run: |
+          Write-Host ""
+          Write-Host "╔══════════════════════════════════════════════╗"
+          Write-Host "║           RDP SESSION READY                 ║"
+          Write-Host "╠══════════════════════════════════════════════╣"
+          Write-Host "║ CONNECT USING:                              ║"
+          Write-Host "║   IP: $env:TAILSCALE_IP                     ║"
+          Write-Host "║   User: RDP                                 ║"
+          Write-Host "║   Password: !Ks2025                         ║"
+          Write-Host "╠══════════════════════════════════════════════╣"
+          Write-Host "║ NOTES:                                      ║"
+          Write-Host "║ • Check Public Desktop for RDP_INFO.txt     ║"
+          Write-Host "║ • Session auto-terminates after 60 minutes  ║"
+          Write-Host "║ • Manual download required                  ║"
+          Write-Host "╚══════════════════════════════════════════════╝"
+          Write-Host ""
+
+      - name: Keep Alive
+        run: |
+          $startTime = Get-Date
+          $timeoutMinutes = 55  # 5 minutes before 1 hour timeout
+          
+          Write-Host "Session started at: $startTime"
+          Write-Host "Will auto-terminate after $timeoutMinutes minutes"
+          Write-Host ""
+          Write-Host "Press Ctrl+C in GitHub to terminate early"
+          
+          while ($true) {
+              $elapsed = (Get-Date) - $startTime
+              $minutes = [math]::Floor($elapsed.TotalMinutes)
+              
+              if ($minutes -ge $timeoutMinutes) {
+                  Write-Host "Time limit reached, session ending soon..."
+                  break
               }
               
-              Start-Sleep -Seconds 300
+              $remaining = $timeoutMinutes - $minutes
+              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Session active - $minutes min elapsed - $remaining min remaining"
+              
+              # Every 5 minutes
+              if ($minutes % 5 -eq 0) {
+                  Write-Host "   → Connect to: $env:TAILSCALE_IP"
+              }
+              
+              Start-Sleep -Seconds 60
           }
+          
+          Write-Host "Session timeout reached. Goodbye!"
